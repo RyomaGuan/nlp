@@ -54,10 +54,8 @@ def log_sum_exp(smat):
 class BiLSTM_CRF(nn.Module):
     def __init__(self, tag2ix, word2ix, embedding_dim, hidden_dim):
         """
-        :param tag2ix: 序列标注问题的 标签 -> 下标 的映射
-        :param word2ix: 输入单词 -> 下标 的映射
-        :param embedding_dim: 喂进BiLSTM的词向量的维度
-        :param hidden_dim: 期望的BiLSTM输出层维度
+        embedding_dim: 词向量的维度
+        hidden_dim: BiLSTM输出层维度
         """
         super(BiLSTM_CRF, self).__init__()
         assert hidden_dim % 2 == 0, 'hidden_dim must be even for Bi-Directional LSTM'
@@ -72,10 +70,13 @@ class BiLSTM_CRF(nn.Module):
         # "START_TAG来自于?" 和 "?来自于END_TAG" 都是无意义的
         self.transitions.data[:, tag2ix[START_TAG]] = self.transitions.data[tag2ix[END_TAG], :] = -10000
 
-    def neg_log_likelihood(self, words, tags):  # 求一对 <sentence, tags> 在当前参数下的负对数似然，作为loss
-        frames = self._get_lstm_features(words)  # emission score at each frame
-        gold_score = self._score_sentence(frames, tags)  # 正确路径的分数
-        forward_score = self._forward_alg(frames)  # 所有路径的分数和
+    # CRF损失函数由两部分组成，真实路径的分数 和 所有路径的总分数。真实路径的分数应该是所有路径中分数最高的
+    # 求一对 <sentence, tags> 在当前参数下的负对数似然，作为loss
+    def neg_log_likelihood(self, words, tags):
+        # emission score at each frame 是发射分数（状态分数），这些状态分数来自BiLSTM层的输出
+        frames = self._get_lstm_features(words)
+        gold_score = self._score_sentence(frames, tags)  # 正确路径的分数，CRF的分子
+        forward_score = self._forward_alg(frames)  # 所有路径的分数和，CRF的分母
         # -(正确路径的分数 - 所有路径的分数和）;注意取负号 -log(a/b) = -[log(a) - log(b)] = log(b) - log(a)
         return forward_score - gold_score
 
@@ -108,10 +109,12 @@ class BiLSTM_CRF(nn.Module):
             # log_sum_exp()内三者相加会广播: 当前各状态的分值分布(列向量) + 发射分值(行向量) + 转移矩阵(方形矩阵)
             # 相加所得矩阵的物理意义见log_sum_exp()函数的注释; 然后按列求log_sum_exp得到行向量
             alpha = log_sum_exp(alpha.T + frame.unsqueeze(0) + self.transitions)
+            # alpha = alpha.T + frame.unsqueeze(0) + self.transitions
         # 最后转到EOS，发射分值为0，转移分值为列向量 self.transitions[:, [self.tag2ix[END_TAG]]]
         return log_sum_exp(alpha.T + 0 + self.transitions[:, [self.tag2ix[END_TAG]]]).flatten()
 
     def _viterbi_decode(self, frames):
+        """ 求最优路径分值 和 最优路径 """
         backtrace = []  # 回溯路径;  backtrace[i][j] := 第i帧到达j状态的所有路径中, 得分最高的那条在i-1帧是神马状态
         alpha = torch.full((1, self.n_tags), -10000.)
         alpha[0][self.tag2ix[START_TAG]] = 0
