@@ -364,12 +364,10 @@ class CrfForwardRnnCell(rnn_cell.RNNCell):
         state = array_ops.expand_dims(state, 2)  # (2, 4, 1)
         transition_scores = state + self._transition_params  # (2, 4, 1) + (1, 4, 4) -> (2, 4, 4)
         new_alphas = inputs + math_ops.reduce_logsumexp(transition_scores, [1])
+        # 为何不是如下形式 ???
+        # transition_scores = inputs + state + self._transition_params
+        # new_alphas = math_ops.reduce_logsumexp(transition_scores, [1])
 
-        # Both the state and the output of this RNN cell contain the alphas values.
-        # The output value is currently unused and simply satisfies the RNN API.
-        # This could be useful in the future if we need to compute marginal
-        # probabilities, which would require the accumulated alpha values at every
-        # time step.
         return new_alphas, new_alphas
 
 
