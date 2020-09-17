@@ -81,8 +81,8 @@ def crf_sequence_score(inputs, tag_indices, sequence_lengths,
 
     # 当句子长度是1时，就没必要计算转移分数。直接从inputs中取出对应tag的值即可
     def _single_seq_fn():
-        batch_size = array_ops.shape(inputs, out_type=tag_indices.dtype)[0]
-        example_inds = array_ops.reshape(math_ops.range(batch_size, dtype=tag_indices.dtype), [-1, 1])
+        batch_size = array_ops.shape(inputs, out_type=tag_indices.dtype)[0]  # （2）
+        example_inds = array_ops.reshape(math_ops.range(batch_size, dtype=tag_indices.dtype), [-1, 1])  # [[0], [1]]
         sequence_scores = array_ops.gather_nd(array_ops.squeeze(inputs, [1]),
                                               array_ops.concat([example_inds, tag_indices], axis=1))
         sequence_scores = array_ops.where(math_ops.less_equal(sequence_lengths, 0),
@@ -166,15 +166,14 @@ def crf_log_norm(inputs, sequence_lengths, transition_params):
     Returns:
       log_norm: A [batch_size] vector of normalizers for a CRF.
     """
-    # Split up the first and rest of the inputs in preparation for the forward
-    # algorithm.
-    first_input = array_ops.slice(inputs, [0, 0, 0], [-1, 1, -1])
-    first_input = array_ops.squeeze(first_input, [1])
+    # inputs: (2, 3, 4)
+    first_input = array_ops.slice(inputs, [0, 0, 0], [-1, 1, -1])  # (2, 1, 4)
+    first_input = array_ops.squeeze(first_input, [1])  # (2, 4)
 
     # If max_seq_len is 1, we skip the algorithm and simply reduce_logsumexp over
     # the "initial state" (the unary potentials).
     def _single_seq_fn():
-        log_norm = math_ops.reduce_logsumexp(first_input, [1])
+        log_norm = math_ops.reduce_logsumexp(first_input, [1])  # (2,)
         # Mask `log_norm` of the sequences with length <= zero.
         log_norm = array_ops.where(math_ops.less_equal(sequence_lengths, 0),
                                    array_ops.zeros_like(log_norm),
@@ -183,15 +182,14 @@ def crf_log_norm(inputs, sequence_lengths, transition_params):
 
     def _multi_seq_fn():
         """Forward computation of alpha values."""
-        rest_of_input = array_ops.slice(inputs, [0, 1, 0], [-1, -1, -1])
+        rest_of_input = array_ops.slice(inputs, [0, 1, 0], [-1, -1, -1])  # (2, 2, 4)
 
         # Compute the alpha values in the forward algorithm in order to get the
         # partition function.
         forward_cell = CrfForwardRnnCell(transition_params)
         # Sequence length is not allowed to be less than zero.
-        sequence_lengths_less_one = math_ops.maximum(
-            constant_op.constant(0, dtype=sequence_lengths.dtype),
-            sequence_lengths - 1)
+        sequence_lengths_less_one = math_ops.maximum(constant_op.constant(0, dtype=sequence_lengths.dtype),
+                                                     sequence_lengths - 1)
         _, alphas = rnn.dynamic_rnn(
             cell=forward_cell,
             inputs=rest_of_input,
@@ -214,10 +212,7 @@ def crf_log_norm(inputs, sequence_lengths, transition_params):
         false_fn=_multi_seq_fn)
 
 
-def crf_log_likelihood(inputs,
-                       tag_indices,
-                       sequence_lengths,
-                       transition_params=None):
+def crf_log_likelihood(inputs, tag_indices, sequence_lengths, transition_params=None):
     """Computes the log-likelihood of tag sequences in a CRF.
     Args:
       inputs: A [batch_size, max_seq_len, num_tags] tensor of unary potentials
@@ -243,7 +238,8 @@ def crf_log_likelihood(inputs,
     # 所有可能tag序列的得分，并将所有得分取exp，然后相加，再取log
     log_norm = crf_log_norm(inputs, sequence_lengths, transition_params)
 
-    # Normalize the scores to get the log-likelihood per example.
+    # sequence_scores可以看成 log(exp(sequence_scores))，因为后面的减数实际上是log(sum(exp(any_sequence_scores)))
+    # 二者相减，实际就是当前tag序列的概率值取log。这也就是 log_likelihood的含义。
     log_likelihood = sequence_scores - log_norm
     return log_likelihood, transition_params
 
@@ -342,7 +338,7 @@ class CrfForwardRnnCell(rnn_cell.RNNCell):
               This matrix is expanded into a [1, num_tags, num_tags] in preparation
               for the broadcast summation occurring within the cell.
         """
-        self._transition_params = array_ops.expand_dims(transition_params, 0)
+        self._transition_params = array_ops.expand_dims(transition_params, 0)  # (4, 4) -> (1, 4, 4)
         self._num_tags = tensor_shape.dimension_value(transition_params.shape[0])
 
     @property
@@ -364,13 +360,9 @@ class CrfForwardRnnCell(rnn_cell.RNNCell):
           new_alphas, new_alphas: A pair of [batch_size, num_tags] matrices
               values containing the new alpha values.
         """
-        state = array_ops.expand_dims(state, 2)
-
-        # This addition op broadcasts self._transitions_params along the zeroth
-        # dimension and state along the second dimension. This performs the
-        # multiplication of previous alpha values and the current binary potentials
-        # in log space.
-        transition_scores = state + self._transition_params
+        # inputs: (2, 2, 4), state: (2, 4)
+        state = array_ops.expand_dims(state, 2)  # (2, 4, 1)
+        transition_scores = state + self._transition_params  # (2, 4, 1) + (1, 4, 4) -> (2, 4, 4)
         new_alphas = inputs + math_ops.reduce_logsumexp(transition_scores, [1])
 
         # Both the state and the output of this RNN cell contain the alphas values.

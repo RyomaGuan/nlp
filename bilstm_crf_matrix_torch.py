@@ -64,29 +64,29 @@ class BiLSTM_CRF(nn.Module):
 
         self.word_embeds = nn.Embedding(len(word2ix), embedding_dim)
         self.lstm = nn.LSTM(embedding_dim, hidden_dim // 2, num_layers=1, bidirectional=True)
-        self.hidden2tag = nn.Linear(hidden_dim, self.n_tags)  # 用于将LSTM的输出 降维到 标签空间
-        # tag间的转移score矩阵，即CRF层参数; 注意这里的定义是未转置过的，即"i到j"的分数(而非"i来自j")
+        # 用于将LSTM的输出 降维到 标签空间
+        self.hidden2tag = nn.Linear(hidden_dim, self.n_tags)
+        # tag间的转移分数矩阵
         self.transitions = nn.Parameter(torch.randn(self.n_tags, self.n_tags))
         # "START_TAG来自于?" 和 "?来自于END_TAG" 都是无意义的
         self.transitions.data[:, tag2ix[START_TAG]] = self.transitions.data[tag2ix[END_TAG], :] = -10000
 
-    # CRF损失函数由两部分组成，真实路径的分数 和 所有路径的总分数。真实路径的分数应该是所有路径中分数最高的
-    # 求一对 <sentence, tags> 在当前参数下的负对数似然，作为loss
+    # CRF损失函数由两部分组成，真实路径的分数 和 所有路径的总分数。
+    # 真实序列的概率是所有路径中的概率最大的
     def neg_log_likelihood(self, words, tags):
-        # emission score at each frame 是发射分数（状态分数），这些状态分数来自BiLSTM层的输出
-        frames = self._get_lstm_features(words)
+        # 状态分数（发射分数），这些状态分数来自BiLSTM层的输出
+        frames = self._get_lstm_features(words)  # (11, 5)
         gold_score = self._score_sentence(frames, tags)  # 正确路径的分数，CRF的分子
         forward_score = self._forward_alg(frames)  # 所有路径的分数和，CRF的分母
-        # -(正确路径的分数 - 所有路径的分数和）;注意取负号 -log(a/b) = -[log(a) - log(b)] = log(b) - log(a)
         return forward_score - gold_score
 
-    def _get_lstm_features(self, words):  # 求出每一帧对应的隐向量
-        # LSTM输入形状(seq_len, batch=1, input_size); 教学演示 batch size 为1
-        embeds = self.word_embeds(self._to_tensor(words, self.word2ix)).view(len(words), 1, -1)
+    def _get_lstm_features(self, words):
+        # words: (11,)
+        embeds = self.word_embeds(self._to_tensor(words, self.word2ix)).view(len(words), 1, -1)  # (11, 1, 5)
         # 随机初始化LSTM的隐状态H
         hidden = torch.randn(2, 1, self.hidden_dim // 2), torch.randn(2, 1, self.hidden_dim // 2)
-        lstm_out, _hidden = self.lstm(embeds, hidden)
-        return self.hidden2tag(lstm_out.squeeze(1))  # 把LSTM输出的隐状态张量去掉batch维，然后降维到tag空间
+        lstm_out, _hidden = self.lstm(embeds, hidden)  # lstm_out: (11, 1, 4)
+        return self.hidden2tag(lstm_out.squeeze(1))  # lstm_out: (11, 4) -> (11, 5)
 
     def _score_sentence(self, frames, tags):
         """
@@ -95,7 +95,8 @@ class BiLSTM_CRF(nn.Module):
         frames:     F0  F1  F2  F3  F4
         tags:  <s>  Y0  Y1  Y2  Y3  Y4  <e>
         """
-        tags_tensor = self._to_tensor([START_TAG] + tags, self.tag2ix)  # 注意不要+[END_TAG]; 结尾有处理
+        # frames: (11, 5), tags: (11,)
+        tags_tensor = self._to_tensor([START_TAG] + tags, self.tag2ix)  # (12,)
         score = torch.zeros(1)
         for i, frame in enumerate(frames):  # 沿途累加每一帧的转移和发射
             score += self.transitions[tags_tensor[i], tags_tensor[i + 1]] + frame[tags_tensor[i + 1]]
@@ -150,17 +151,21 @@ if __name__ == "__main__":
     model = BiLSTM_CRF(tag2ix={"B": 0, "I": 1, "O": 2, START_TAG: 3, END_TAG: 4},
                        word2ix={w: i for i, w in enumerate({w for s, _ in training_data for w in s})},
                        embedding_dim=5, hidden_dim=4)
-
-    with torch.no_grad():  # 训练前, 观察一下预测结果(应该是随机或者全零参数导致的结果)
+    # 训练前, 观察一下预测结果(应该是随机或者全零参数导致的结果)
+    with torch.no_grad():
         print(model(training_data[0][0]))
 
     optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=1e-4)
-    for epoch in range(300):  # 不要试图改成100, 在这个教学例子数据集上会欠拟合……
+    for epoch in range(300):
         for words, tags in training_data:
-            model.zero_grad()  # PyTorch默认会累积梯度; 而我们需要每条样本单独算梯度
-            model.neg_log_likelihood(words, tags).backward()  # 前向求出负对数似然(loss); 然后回传梯度
-            optimizer.step()  # 梯度下降，更新参数
+            # PyTorch默认会累积梯度; 而我们需要每条样本单独算梯度
+            model.zero_grad()
+            # 前向求出负对数似然(loss); 然后回传梯度
+            model.neg_log_likelihood(words, tags).backward()
+            # 梯度下降，更新参数
+            optimizer.step()
 
-    # 训练后的预测结果(有意义的结果，与label一致); 打印类似 (18.722553253173828, [0, 1, 1, 1, 2, 2, 2, 0, 1, 2, 2])
-    with torch.no_grad():  # 这里用了第一条训练数据(而非专门的测试数据)，仅作教学演示
+    # 这里用了第一条训练数据
+    # 训练后的预测结果(有意义的结果，与label一致)，(18.722553253173828, [0, 1, 1, 1, 2, 2, 2, 0, 1, 2, 2])
+    with torch.no_grad():
         print(model(training_data[0][0]))
