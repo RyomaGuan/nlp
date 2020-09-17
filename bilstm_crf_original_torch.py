@@ -174,13 +174,10 @@ EMBEDDING_DIM = 5
 HIDDEN_DIM = 4
 
 # Make up some training data
-training_data = [(
-    "the wall street journal reported today that apple corporation made money".split(),
-    "B I I I O O O B I O O".split()
-), (
-    "georgia tech is a university in georgia".split(),
-    "B I O O O O B".split()
-)]
+training_data = [("the wall street journal reported today that apple corporation made money".split(),
+                  "B I I I O O O B I O O".split()),
+                 ("georgia tech is a university in georgia".split(),
+                  "B I O O O O B".split())]
 
 word_to_ix = {}
 for sentence, tags in training_data:

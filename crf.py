@@ -64,6 +64,7 @@ __all__ = [
 ]
 
 
+# 正确路径的分数，CRF的分子
 def crf_sequence_score(inputs, tag_indices, sequence_lengths,
                        transition_params):
     """Computes the unnormalized score for a tag sequence.
@@ -78,25 +79,22 @@ def crf_sequence_score(inputs, tag_indices, sequence_lengths,
       sequence_scores: A [batch_size] vector of unnormalized sequence scores.
     """
 
-    # If max_seq_len is 1, we skip the score calculation and simply gather the
-    # unary potentials of the single tag.
+    # 当句子长度是1时，就没必要计算转移分数。直接从inputs中取出对应tag的值即可
     def _single_seq_fn():
         batch_size = array_ops.shape(inputs, out_type=tag_indices.dtype)[0]
-        example_inds = array_ops.reshape(
-            math_ops.range(batch_size, dtype=tag_indices.dtype), [-1, 1])
-        sequence_scores = array_ops.gather_nd(
-            array_ops.squeeze(inputs, [1]),
-            array_ops.concat([example_inds, tag_indices], axis=1))
+        example_inds = array_ops.reshape(math_ops.range(batch_size, dtype=tag_indices.dtype), [-1, 1])
+        sequence_scores = array_ops.gather_nd(array_ops.squeeze(inputs, [1]),
+                                              array_ops.concat([example_inds, tag_indices], axis=1))
         sequence_scores = array_ops.where(math_ops.less_equal(sequence_lengths, 0),
                                           array_ops.zeros_like(sequence_scores),
                                           sequence_scores)
         return sequence_scores
 
+    # 当句子长度大于1时，就必须计算转移分数，是正常的状态
     def _multi_seq_fn():
         # Compute the scores of the given tag sequence.
         unary_scores = crf_unary_score(tag_indices, sequence_lengths, inputs)
-        binary_scores = crf_binary_score(tag_indices, sequence_lengths,
-                                         transition_params)
+        binary_scores = crf_binary_score(tag_indices, sequence_lengths, transition_params)
         sequence_scores = unary_scores + binary_scores
         return sequence_scores
 
@@ -240,9 +238,9 @@ def crf_log_likelihood(inputs,
     # Get the transition matrix if not provided.
     if transition_params is None:
         transition_params = vs.get_variable("transitions", [num_tags, num_tags])
-
-    sequence_scores = crf_sequence_score(inputs, tag_indices, sequence_lengths,
-                                         transition_params)
+    # 一个tag序列的得分(状态分数 + 转移分数)，假设用s表示
+    sequence_scores = crf_sequence_score(inputs, tag_indices, sequence_lengths, transition_params)
+    # 所有可能tag序列的得分，并将所有得分取exp，然后相加，再取log
     log_norm = crf_log_norm(inputs, sequence_lengths, transition_params)
 
     # Normalize the scores to get the log-likelihood per example.
@@ -250,6 +248,7 @@ def crf_log_likelihood(inputs,
     return log_likelihood, transition_params
 
 
+# 一元分值，状态分数，不是概率
 def crf_unary_score(tag_indices, sequence_lengths, inputs):
     """Computes the unary scores of tag sequences.
     Args:
@@ -259,32 +258,42 @@ def crf_unary_score(tag_indices, sequence_lengths, inputs):
     Returns:
       unary_scores: A [batch_size] vector of unary scores.
     """
-    batch_size = array_ops.shape(inputs)[0]
-    max_seq_len = array_ops.shape(inputs)[1]
-    num_tags = array_ops.shape(inputs)[2]
-
-    flattened_inputs = array_ops.reshape(inputs, [-1])
-
-    offsets = array_ops.expand_dims(
-        math_ops.range(batch_size) * max_seq_len * num_tags, 1)
-    offsets += array_ops.expand_dims(math_ops.range(max_seq_len) * num_tags, 0)
+    # inputs: (2, 3, 4)
+    batch_size = array_ops.shape(inputs)[0]  # 2
+    max_seq_len = array_ops.shape(inputs)[1]  # 3
+    num_tags = array_ops.shape(inputs)[2]  # 4
+    # 将整个输入拉平，变成一维数组
+    flattened_inputs = array_ops.reshape(inputs, [-1])  # (24,)
+    # 确定铺平后，batch中每个句子的起点
+    # [0, 1] * 3 * 4 -> [0, 12] -> [[0], [12]]
+    offsets = array_ops.expand_dims(math_ops.range(batch_size) * max_seq_len * num_tags, 1)
+    # 确定铺平后，batch中每个句子中的每个字的起点
+    # [[0], [12]] + [[0, 1, 2] * 4] -> [[0, 4, 8], [12, 16, 20]]
+    offsets += array_ops.expand_dims(math_ops.range(max_seq_len) * num_tags, 0)  # (2, 3)
     # Use int32 or int64 based on tag_indices' dtype.
     if tag_indices.dtype == dtypes.int64:
         offsets = math_ops.cast(offsets, dtypes.int64)
-    flattened_tag_indices = array_ops.reshape(offsets + tag_indices, [-1])
-
+    # 将tag_indices转化成铺平后的indices
+    flattened_tag_indices = array_ops.reshape(offsets + tag_indices, [-1])  # (6,)
+    # 根据索引从参数轴上收集切片，并重新reshape
+    # input = [[[1, 1, 1], [2, 2, 2]],
+    #          [[3, 3, 3], [4, 4, 4]],
+    #          [[5, 5, 5], [6, 6, 6]]]
+    # tf.gather(input, [0, 2]) ==> [[[1, 1, 1], [2, 2, 2]],
+    #                               [[5, 5, 5], [6, 6, 6]]]
     unary_scores = array_ops.reshape(
         array_ops.gather(flattened_inputs, flattened_tag_indices),
-        [batch_size, max_seq_len])
-
+        [batch_size, max_seq_len])  # (2, 3)
+    # 根据句子长度，生成mask
     masks = array_ops.sequence_mask(sequence_lengths,
                                     maxlen=array_ops.shape(tag_indices)[1],
-                                    dtype=dtypes.float32)
-
-    unary_scores = math_ops.reduce_sum(unary_scores * masks, 1)
+                                    dtype=dtypes.float32)  # (2, 3)
+    # 将每个字符的分数相加，作为标签序列的unary_scores
+    unary_scores = math_ops.reduce_sum(unary_scores * masks, 1)  # (2,)
     return unary_scores
 
 
+# 二元分值，转移分数，不是概率
 def crf_binary_score(tag_indices, sequence_lengths, transition_params):
     """Computes the binary scores of tag sequences.
     Args:
@@ -294,29 +303,30 @@ def crf_binary_score(tag_indices, sequence_lengths, transition_params):
     Returns:
       binary_scores: A [batch_size] vector of binary scores.
     """
+    # tag_indices:(2, 3), transition_params: (4, 4)
     # Get shape information.
-    num_tags = transition_params.get_shape()[0]
-    num_transitions = array_ops.shape(tag_indices)[1] - 1
+    num_tags = transition_params.get_shape()[0]  # 4
+    # 发生转移的次数
+    num_transitions = array_ops.shape(tag_indices)[1] - 1  # 2
 
-    # Truncate by one on each side of the sequence to get the start and end
-    # indices of each transition.
-    start_tag_indices = array_ops.slice(tag_indices, [0, 0],
-                                        [-1, num_transitions])
-    end_tag_indices = array_ops.slice(tag_indices, [0, 1], [-1, num_transitions])
+    # tag_indices = [[4, 1, 2], [0, 2, 1]]
+    # -> start_tag_indices: [[4, 1], [0, 2]]
+    # -> end_tag_indices: [[1, 2], [2, 1]]
+    start_tag_indices = array_ops.slice(tag_indices, [0, 0], [-1, num_transitions])  # (2, 2)
+    end_tag_indices = array_ops.slice(tag_indices, [0, 1], [-1, num_transitions])  # (2, 2)
 
     # Encode the indices in a flattened representation.
     flattened_transition_indices = start_tag_indices * num_tags + end_tag_indices
     flattened_transition_params = array_ops.reshape(transition_params, [-1])
 
-    # Get the binary scores based on the flattened representation.
-    binary_scores = array_ops.gather(flattened_transition_params,
-                                     flattened_transition_indices)
+    # 在flattened_transition_params中获得每一个转移的分数值
+    binary_scores = array_ops.gather(flattened_transition_params, flattened_transition_indices)  # (2, 2)
 
     masks = array_ops.sequence_mask(sequence_lengths,
                                     maxlen=array_ops.shape(tag_indices)[1],
-                                    dtype=dtypes.float32)
-    truncated_masks = array_ops.slice(masks, [0, 1], [-1, -1])
-    binary_scores = math_ops.reduce_sum(binary_scores * truncated_masks, 1)
+                                    dtype=dtypes.float32)  # (2, 3)
+    truncated_masks = array_ops.slice(masks, [0, 1], [-1, -1])  # (2, 2)
+    binary_scores = math_ops.reduce_sum(binary_scores * truncated_masks, 1)  # (2,)
     return binary_scores
 
 

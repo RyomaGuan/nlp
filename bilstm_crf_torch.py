@@ -144,7 +144,8 @@ class BiLSTM_CRF(nn.Module):
 if __name__ == "__main__":
     training_data = [("the wall street journal reported today that apple corporation made money".split(),
                       "B I I I O O O B I O O".split()),
-                     ("georgia tech is a university in georgia".split(), "B I O O O O B".split())]
+                     ("georgia tech is a university in georgia".split(),
+                      "B I O O O O B".split())]
 
     model = BiLSTM_CRF(tag2ix={"B": 0, "I": 1, "O": 2, START_TAG: 3, END_TAG: 4},
                        word2ix={w: i for i, w in enumerate({w for s, _ in training_data for w in s})},
