@@ -246,13 +246,16 @@ def crf_log_likelihood(inputs, tag_indices, sequence_lengths, transition_params=
 
 # 一元分值，状态分数，不是概率
 def crf_unary_score(tag_indices, sequence_lengths, inputs):
-    """Computes the unary scores of tag sequences.
-    Args:
-      tag_indices: A [batch_size, max_seq_len] matrix of tag indices.
-      sequence_lengths: A [batch_size] vector of true sequence lengths.
-      inputs: A [batch_size, max_seq_len, num_tags] tensor of unary potentials.
-    Returns:
-      unary_scores: A [batch_size] vector of unary scores.
+    """
+    crf_unary_score计算一元概率，输出一个维度为[batch_size]的向量，向量中的每一个元素是一个sequence中所有的真实标签概率之和。
+    inputs的维度为[batch_size, max_seq_len, num_tags]，一般为BiLSTM或者是Bert的输出。
+    num_tags为标签数
+    inputs[i][k]表示的是，当前batch中的第i个序列，其位置j对应的输出属于类别k的概率。
+    flattened_inputs将input变为一维， tag_indices为真实的标签，维度为[batch_size, max_seq_len]
+    offsets的维度为[batch_size, max_seq_len], offsetsi = (batch_size i + max_seq_len j) * num_tags
+    因此，offsets + tag_indices中(i，j)位置的值表示的是，当前batch中的第i个序列，其位置j对应的输出属于类别tag_indicesi的概率位于flatten_inputs
+    拉平后得到 flattened_tag_indices，通过gather函数，得到所有的一元概率
+    最后，使用sequence_mask根据序列的真是长度，生成mask，得到所有有效的一元概率之和unary_scores。
     """
     # inputs: (2, 3, 4)
     batch_size = array_ops.shape(inputs)[0]  # 2
@@ -291,13 +294,12 @@ def crf_unary_score(tag_indices, sequence_lengths, inputs):
 
 # 二元分值，转移分数，不是概率
 def crf_binary_score(tag_indices, sequence_lengths, transition_params):
-    """Computes the binary scores of tag sequences.
-    Args:
-      tag_indices: A [batch_size, max_seq_len] matrix of tag indices.
-      sequence_lengths: A [batch_size] vector of true sequence lengths.
-      transition_params: A [num_tags, num_tags] matrix of binary potentials.
-    Returns:
-      binary_scores: A [batch_size] vector of binary scores.
+    """
+    crf_binary_score计算二元概率，输出维度为[batch_size]，向量中的每个元素是一个sequence中所有的转移概率之和。
+    序列的长度为num_transitions，则会发生num_transitions-1此转移
+    转移的起始下标start_tag_indices对应 [0, ..., num_transitions-2]
+    结束下标end_tag_indices对应 [1, ..., num_transitions-1]
+    使用与crf_unary_score类似的原理取出对应位置的转移概率，进行mask操作求和，返回binary_scores。
     """
     # tag_indices:(2, 3), transition_params: (4, 4)
     # Get shape information.
@@ -360,13 +362,14 @@ class CrfForwardRnnCell(rnn_cell.RNNCell):
           new_alphas, new_alphas: A pair of [batch_size, num_tags] matrices
               values containing the new alpha values.
         """
-        # inputs: (2, 2, 4), state: (2, 4)
+        # inputs: (2, 4), state: (2, 4)
         state = array_ops.expand_dims(state, 2)  # (2, 4, 1)
         transition_scores = state + self._transition_params  # (2, 4, 1) + (1, 4, 4) -> (2, 4, 4)
-        new_alphas = inputs + math_ops.reduce_logsumexp(transition_scores, [1])
+        new_alphas = inputs + math_ops.reduce_logsumexp(transition_scores, [1])  # (2, 4) + (2, 4) -> (2, 4)
         # 为何不是如下形式 ???
         # transition_scores = inputs + state + self._transition_params
         # new_alphas = math_ops.reduce_logsumexp(transition_scores, [1])
+        # 答案: log_sum_exp(Emi_i_j) = Emi_i_j
 
         return new_alphas, new_alphas
 
