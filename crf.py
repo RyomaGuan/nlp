@@ -184,8 +184,7 @@ def crf_log_norm(inputs, sequence_lengths, transition_params):
         """Forward computation of alpha values."""
         rest_of_input = array_ops.slice(inputs, [0, 1, 0], [-1, -1, -1])  # (2, 2, 4)
 
-        # Compute the alpha values in the forward algorithm in order to get the
-        # partition function.
+        # Compute the alpha values in the forward algorithm in order to get the partition function.
         forward_cell = CrfForwardRnnCell(transition_params)
         # Sequence length is not allowed to be less than zero.
         sequence_lengths_less_one = math_ops.maximum(constant_op.constant(0, dtype=sequence_lengths.dtype),

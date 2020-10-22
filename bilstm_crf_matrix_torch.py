@@ -4,7 +4,6 @@ BiLSTM-CRF的PyTorch教学实现，矩阵化版本，含详尽注释和举例
 - PyTorch官方教学代码: https://pytorch.org/tutorials/beginner/nlp/advanced_tutorial.html
 - 矩阵化推导: https://zhuanlan.zhihu.com/p/44042528
 - BiLSTM-CRF原文: https://arxiv.org/pdf/1508.01991v1.pdf
-by 虎哥@知乎    koyo922@.qq.com    2019/12/16
 """
 import torch
 import torch.nn as nn
